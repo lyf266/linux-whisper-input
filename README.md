@@ -66,6 +66,24 @@ sequenceDiagram
 
 ## 📦 Prerequisites & Installation
 
+### 🤖 Agent / One-Key Quick Installation
+
+If you are using an AI coding assistant (Agent) or want a fully automated one-key setup, you can simply run:
+
+```bash
+chmod +x install.sh && ./install.sh
+```
+
+This script will automatically:
+1. Install system pacman dependencies (`portaudio`, `notify-send`, `wl-clipboard`, `xdotool`, `ydotool`).
+2. Add your user to the `input` group and configure udev rules for virtual keyboard injection.
+3. Initialize the Python virtual environment and install dependencies.
+4. Download the `large-v3-turbo` model from ModelScope.
+5. Register, reload, and start the systemd user service.
+6. Programmatically bind the `Meta+H` global shortcut in KDE Plasma 6.
+
+*Note: If you want to do a manual, step-by-step setup instead, proceed with the sections below.*
+
 ### 1. Install System Dependencies
 
 Ensure you have the required audio and input injection packages installed on Arch Linux:
