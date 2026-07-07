@@ -1,0 +1,12 @@
+[Unit]
+Description=Real-time Voice Input Daemon (Whisper)
+After=pipewire.service sound.target
+
+[Service]
+Type=simple
+ExecStart=/home/f1are/voice-input-service/start.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

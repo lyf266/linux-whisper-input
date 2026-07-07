@@ -1,0 +1,14 @@
+{
+  "model_size": "/home/f1are/voice-input-service/model",
+  "device": "cuda",
+  "compute_type": "float16",
+  "language": "zh",
+  "sample_rate": 16000,
+  "channels": 1,
+  "silence_threshold": 0.04,
+  "min_record_seconds": 0.8,
+  "max_record_seconds": 60.0,
+  "silence_duration": 1.2,
+  "initial_prompt": "以下是普通话的句子，支持中英文混说，有标点符号。",
+  "proxy": ""
+}

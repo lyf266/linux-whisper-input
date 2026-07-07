@@ -1,0 +1,20 @@
+# Virtual Environment
+venv/
+
+# Model cache weights (1.6GB binary files)
+model/
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Socket files and logs
+*.sock
+*.log
+voice-input-run.log
+
+# IDE files
+.idea/
+.vscode/
