@@ -1,6 +1,6 @@
-# Arch Linux Real-time Voice Input Service
+# Linux Whisper Input
 
-A lightweight, high-performance, and completely local voice-to-text dictation service for Arch Linux (Wayland / X11). 
+A lightweight, high-performance, and completely local voice-to-text dictation service for Linux (Wayland / X11). 
 
 By using a client-server (C/S) architecture, this service keeps the Whisper model and CUDA context permanently preloaded in GPU memory (VRAM) as a background systemd user daemon. When you press the global shortcut (`Meta+H`), it records audio from your microphone, runs instant GPU-accelerated transcription, and inserts the text directly at your cursor.
 
