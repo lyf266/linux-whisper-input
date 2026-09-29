@@ -194,6 +194,29 @@ def type_text(text: str):
         except Exception as e:
             print(f"xdotool failed: {e}")
 
+def trim_trailing_silence(audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.02, pad_seconds: float = 0.3) -> np.ndarray:
+    """
+    Trim trailing silence from recorded audio to prevent Whisper hallucination loops.
+    """
+    if len(audio) == 0:
+        return audio
+        
+    chunk_size = int(sample_rate * 0.1)  # 100ms blocks
+    num_chunks = len(audio) // chunk_size
+    if num_chunks == 0:
+        return audio
+        
+    last_voice_idx = len(audio)
+    for i in range(num_chunks - 1, -1, -1):
+        chunk = audio[i * chunk_size : (i + 1) * chunk_size]
+        chunk_rms = np.sqrt(np.mean(chunk ** 2))
+        if chunk_rms > threshold:
+            pad_samples = int(pad_seconds * sample_rate)
+            last_voice_idx = min(len(audio), (i + 1) * chunk_size + pad_samples)
+            break
+            
+    return audio[:last_voice_idx]
+
 # Transcribe function
 def stop_and_transcribe(reason="auto"):
     global state, recorder
@@ -224,16 +247,32 @@ def stop_and_transcribe(reason="auto"):
     try:
         audio_float = audio_data.flatten()
         
+        # Trim trailing silence to prevent hallucination on tail padding
+        orig_len = len(audio_float)
+        audio_float = trim_trailing_silence(audio_float, sample_rate=SAMPLE_RATE, threshold=SILENCE_THRESHOLD / 2.0, pad_seconds=0.3)
+        trimmed_len = len(audio_float)
+        if orig_len > trimmed_len:
+            print(f"[{time.strftime('%H:%M:%S')}] Trimmed trailing silence: {(orig_len - trimmed_len) / SAMPLE_RATE:.2f}s removed.")
+        
         # Determine language parameter: None enables Whisper auto-detection (crucial for English & code)
         transcribe_lang = None if (not LANGUAGE or str(LANGUAGE).lower() in ("auto", "none")) else LANGUAGE
         
-        # Run Whisper model
+        # Run Whisper model with rigorous anti-hallucination settings
         segments, info = model.transcribe(
             audio_float,
             language=transcribe_lang,
             beam_size=5,
+            condition_on_previous_text=False,  # CRITICAL: Disables runaway feedback loops from previous chunks
+            repetition_penalty=1.15,            # Penalizes repetitive hallucinated token loops
+            no_repeat_ngram_size=3,             # Forbids 3-gram repetitions (like "the gap, we call it the gap")
+            compression_ratio_threshold=2.2,    # Filters out runaway repetitive segments
             vad_filter=True,
-            vad_parameters=dict(speech_pad_ms=250),
+            vad_parameters=dict(
+                threshold=0.5,
+                min_speech_duration_ms=250,
+                min_silence_duration_ms=400,
+                speech_pad_ms=200
+            ),
             initial_prompt=INITIAL_PROMPT if INITIAL_PROMPT else None
         )
         
