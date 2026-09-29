@@ -8,17 +8,18 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(DIR, "config.json")
 
 DEFAULT_CONFIG = {
-    "model_size": "deepdml/faster-whisper-large-v3-turbo-ct2",
+    "model_size": "/home/f1are/voice-input-service/model",
     "device": "cuda",
     "compute_type": "float16",
-    "language": "zh",
+    "language": "auto",
     "sample_rate": 16000,
     "channels": 1,
     "silence_threshold": 0.04,
-    "min_record_seconds": 0.8,
-    "max_record_seconds": 60.0,
-    "silence_duration": 1.2,
-    "initial_prompt": "以下是普通话的句子，支持中英文混说，有标点符号。",
+    "min_record_seconds": 0.5,
+    "max_record_seconds": 120.0,
+    "silence_duration": 3.0,
+    "auto_stop_on_silence": True,
+    "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
     "proxy": ""
 }
 
@@ -52,17 +53,39 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
-MODEL_SIZE = config["model_size"]
-DEVICE = config["device"]
-COMPUTE_TYPE = config["compute_type"]
-LANGUAGE = config["language"]
-SAMPLE_RATE = config["sample_rate"]
-CHANNELS = config["channels"]
-SILENCE_THRESHOLD = config["silence_threshold"]
-MIN_RECORD_SECONDS = config["min_record_seconds"]
-MAX_RECORD_SECONDS = config["max_record_seconds"]
-SILENCE_DURATION = config["silence_duration"]
-INITIAL_PROMPT = config["initial_prompt"]
+MODEL_SIZE = config.get("model_size", DEFAULT_CONFIG["model_size"])
+DEVICE = config.get("device", DEFAULT_CONFIG["device"])
+COMPUTE_TYPE = config.get("compute_type", DEFAULT_CONFIG["compute_type"])
+LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
+SAMPLE_RATE = config.get("sample_rate", DEFAULT_CONFIG["sample_rate"])
+CHANNELS = config.get("channels", DEFAULT_CONFIG["channels"])
+SILENCE_THRESHOLD = config.get("silence_threshold", DEFAULT_CONFIG["silence_threshold"])
+MIN_RECORD_SECONDS = config.get("min_record_seconds", DEFAULT_CONFIG["min_record_seconds"])
+MAX_RECORD_SECONDS = config.get("max_record_seconds", DEFAULT_CONFIG["max_record_seconds"])
+SILENCE_DURATION = config.get("silence_duration", DEFAULT_CONFIG["silence_duration"])
+AUTO_STOP_ON_SILENCE = config.get("auto_stop_on_silence", DEFAULT_CONFIG["auto_stop_on_silence"])
+INITIAL_PROMPT = config.get("initial_prompt", DEFAULT_CONFIG["initial_prompt"])
+
+def reload_runtime_config():
+    global config, LANGUAGE, SAMPLE_RATE, CHANNELS, SILENCE_THRESHOLD
+    global MIN_RECORD_SECONDS, MAX_RECORD_SECONDS, SILENCE_DURATION, AUTO_STOP_ON_SILENCE, INITIAL_PROMPT
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                new_cfg = json.load(f)
+                config.update(new_cfg)
+                LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
+                SAMPLE_RATE = config.get("sample_rate", DEFAULT_CONFIG["sample_rate"])
+                CHANNELS = config.get("channels", DEFAULT_CONFIG["channels"])
+                SILENCE_THRESHOLD = float(config.get("silence_threshold", DEFAULT_CONFIG["silence_threshold"]))
+                MIN_RECORD_SECONDS = float(config.get("min_record_seconds", DEFAULT_CONFIG["min_record_seconds"]))
+                MAX_RECORD_SECONDS = float(config.get("max_record_seconds", DEFAULT_CONFIG["max_record_seconds"]))
+                SILENCE_DURATION = float(config.get("silence_duration", DEFAULT_CONFIG["silence_duration"]))
+                AUTO_STOP_ON_SILENCE = bool(config.get("auto_stop_on_silence", DEFAULT_CONFIG["auto_stop_on_silence"]))
+                INITIAL_PROMPT = config.get("initial_prompt", DEFAULT_CONFIG["initial_prompt"])
+                print(f"[{time.strftime('%H:%M:%S')}] Runtime config reloaded (lang={LANGUAGE}, silence_dur={SILENCE_DURATION}s, auto_stop={AUTO_STOP_ON_SILENCE})")
+        except Exception as e:
+            print(f"Error reloading config: {e}")
 
 # State variables
 state_lock = threading.Lock()
@@ -172,9 +195,9 @@ def type_text(text: str):
             print(f"xdotool failed: {e}")
 
 # Transcribe function
-def stop_and_transcribe():
+def stop_and_transcribe(reason="auto"):
     global state, recorder
-    print(f"[{time.strftime('%H:%M:%S')}] stop_and_transcribe starting...")
+    print(f"[{time.strftime('%H:%M:%S')}] stop_and_transcribe starting (reason: {reason})...")
     
     # Stop recording
     audio_data = None
@@ -201,21 +224,28 @@ def stop_and_transcribe():
     try:
         audio_float = audio_data.flatten()
         
+        # Determine language parameter: None enables Whisper auto-detection (crucial for English & code)
+        transcribe_lang = None if (not LANGUAGE or str(LANGUAGE).lower() in ("auto", "none")) else LANGUAGE
+        
         # Run Whisper model
         segments, info = model.transcribe(
             audio_float,
-            language=LANGUAGE,
+            language=transcribe_lang,
             beam_size=5,
             vad_filter=True,
-            vad_parameters=dict(speech_pad_ms=200),
-            initial_prompt=INITIAL_PROMPT
+            vad_parameters=dict(speech_pad_ms=250),
+            initial_prompt=INITIAL_PROMPT if INITIAL_PROMPT else None
         )
         
-        result_text = "".join(seg.text.strip() for seg in segments if seg.text.strip())
+        print(f"[{time.strftime('%H:%M:%S')}] Language detected: '{info.language}' (prob: {info.language_probability:.2f})")
+        
+        # Combine segments preserving proper whitespace for English words and natural punctuation
+        raw_text = "".join(seg.text for seg in segments).strip()
+        result_text = raw_text
         
         if result_text:
             print(f"[{time.strftime('%H:%M:%S')}] Transcription finished successfully. Result: {result_text}")
-            send_notification("✓ 识别完成", result_text, timeout_ms=1500)
+            send_notification("✓ 识别完成", result_text, timeout_ms=2000)
             type_text(result_text)
         else:
             print(f"[{time.strftime('%H:%M:%S')}] Transcription finished. No speech/text detected.")
@@ -242,11 +272,15 @@ def silence_timer_loop():
         
         elapsed = time.time() - recording_start
         
-        # Max duration timeout
+        # Max duration timeout (hard cap)
         if elapsed >= MAX_RECORD_SECONDS:
-            print("Max recording duration reached")
-            trigger_stop()
+            print(f"Max recording duration ({MAX_RECORD_SECONDS}s) reached")
+            trigger_stop(reason="max_duration")
             break
+            
+        # If auto_stop_on_silence is False, stay in manual mode
+        if not AUTO_STOP_ON_SILENCE:
+            continue
             
         # VAD silence check
         if recorder and len(recorder.audio_chunks) >= 3:
@@ -260,36 +294,40 @@ def silence_timer_loop():
                     if elapsed > MIN_RECORD_SECONDS:
                         silence_start = time.time()
                 elif time.time() - silence_start >= SILENCE_DURATION:
-                    print("Silence detected, auto-stopping...")
-                    trigger_stop()
+                    print(f"Silence detected ({SILENCE_DURATION:.1f}s), auto-stopping...")
+                    trigger_stop(reason="silence")
                     break
 
-def trigger_stop():
+def trigger_stop(reason="auto"):
     global state
     with state_lock:
         if state == "RECORDING":
             state = "TRANSCRIBING"
-            threading.Thread(target=stop_and_transcribe).start()
+            threading.Thread(target=stop_and_transcribe, kwargs={"reason": reason}, daemon=True).start()
 
 def handle_toggle():
     global state, recorder, silence_timer_thread
     print(f"[{time.strftime('%H:%M:%S')}] Toggle received. Current state: {state}")
     with state_lock:
         if state == "IDLE":
+            reload_runtime_config()
             state = "RECORDING"
             print("Transitioning to RECORDING state. Starting audio stream...")
-            send_notification("🎤 开始录音...", "请开始说话...")
+            
+            hint = "再次按快捷键手动发送" + (f"，或停顿{SILENCE_DURATION:g}秒自动发送" if AUTO_STOP_ON_SILENCE else "")
+            send_notification("🎤 正在录音...", hint, timeout_ms=3000)
             
             recorder = RecordingThread()
             recorder.start()
             
-            silence_timer_thread = threading.Thread(target=silence_timer_loop)
+            silence_timer_thread = threading.Thread(target=silence_timer_loop, daemon=True)
             silence_timer_thread.start()
             
         elif state == "RECORDING":
             state = "TRANSCRIBING"
-            print("Transitioning to TRANSCRIBING state. Stopping audio stream...")
-            threading.Thread(target=stop_and_transcribe).start()
+            print("Transitioning to TRANSCRIBING state (Manual Stop). Stopping audio stream...")
+            send_notification("⏹️ 结束录音", "正在识别，请稍候...", timeout_ms=1500)
+            threading.Thread(target=stop_and_transcribe, kwargs={"reason": "manual"}, daemon=True).start()
             
         elif state == "TRANSCRIBING":
             print("Currently transcribing, toggle ignored.")

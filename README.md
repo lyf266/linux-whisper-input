@@ -144,14 +144,15 @@ Configure your recording thresholds and hardware settings in `config.json`:
   "model_size": "/home/f1are/voice-input-service/model",
   "device": "cuda",
   "compute_type": "float16",
-  "language": "zh",
+  "language": "auto",
   "sample_rate": 16000,
   "channels": 1,
   "silence_threshold": 0.04,
-  "min_record_seconds": 0.8,
-  "max_record_seconds": 60.0,
-  "silence_duration": 1.2,
-  "initial_prompt": "以下是普通话的句子，支持中英文混说，有标点符号。",
+  "min_record_seconds": 0.5,
+  "max_record_seconds": 120.0,
+  "silence_duration": 3.0,
+  "auto_stop_on_silence": true,
+  "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
   "proxy": ""
 }
 ```
@@ -159,7 +160,10 @@ Configure your recording thresholds and hardware settings in `config.json`:
 *   `model_size`: Point directly to the local folder where model files are stored.
 *   `device`: Set to `cuda` for GPU or `cpu` for CPU fallback.
 *   `compute_type`: Set to `float16` (GPU) or `int8` (CPU).
-*   `silence_duration`: Silence duration in seconds before recording auto-stops (VAD timeout).
+*   `language`: Set to `"auto"` for automatic multilingual detection (seamless English & Chinese switching), or specify `"zh"`, `"en"`.
+*   `silence_duration`: Silence duration in seconds before recording auto-stops (default is now `3.0` seconds for comfortable pauses).
+*   `auto_stop_on_silence`: If `true`, stops automatically after silence. If `false`, recording only stops when pressing the shortcut again.
+*   **Runtime Reload**: Modifying `config.json` takes effect on the next recording trigger without restarting the systemd service!
 
 ---
 
