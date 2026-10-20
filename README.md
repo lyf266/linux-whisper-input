@@ -147,7 +147,8 @@ Configure your recording thresholds and hardware settings in `config.json`:
   "language": "auto",
   "sample_rate": 16000,
   "channels": 1,
-  "silence_threshold": 0.04,
+  "input_device": "",
+  "silence_threshold": 0.01,
   "min_record_seconds": 0.5,
   "max_record_seconds": 120.0,
   "silence_duration": 3.0,
@@ -155,7 +156,7 @@ Configure your recording thresholds and hardware settings in `config.json`:
   "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
   "proxy": "",
   "sound_enabled": true,
-  "sound_volume": 0.5,
+  "sound_volume": 0.15,
   "sound_on_start": true,
   "sound_on_stop": true,
   "sound_on_success": true,
@@ -169,10 +170,12 @@ Configure your recording thresholds and hardware settings in `config.json`:
 *   `device`: Set to `cuda` for GPU or `cpu` for CPU fallback.
 *   `compute_type`: Set to `float16` (GPU) or `int8` (CPU).
 *   `language`: Set to `"auto"` for automatic multilingual detection (seamless English & Chinese switching), or specify `"zh"`, `"en"`.
-*   `silence_duration`: Silence duration in seconds before recording auto-stops (default is now `3.0` seconds for comfortable pauses).
+*   `input_device`: Microphone input device name or index (default `""` automatically follows system default PipeWire/PulseAudio input).
+*   `silence_threshold`: RMS energy threshold for detecting voice vs silence (default `0.01`).
+*   `silence_duration`: Silence duration in seconds before recording auto-stops (default `3.0` seconds).
 *   `auto_stop_on_silence`: If `true`, stops automatically after silence. If `false`, recording only stops when pressing the shortcut again.
 *   `sound_enabled`: Master switch for audio prompt sound effects (`true`/`false`).
-*   `sound_volume`: Volume scale (`0.0` - `1.0`, default `0.5`).
+*   `sound_volume`: Volume scale (`0.0` - `1.0`, default `0.15`).
 *   `sound_on_start`: Enable sound on recording start (`true`/`false`). Plays a rising chime before mic opens to prevent bleed.
 *   `sound_on_stop`: Enable sound on recording stop (`true`/`false`). Plays a soft falling chime.
 *   `sound_on_success`: Enable sound when text transcription finishes and pastes (`true`/`false`).

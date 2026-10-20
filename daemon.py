@@ -14,7 +14,8 @@ DEFAULT_CONFIG = {
     "language": "auto",
     "sample_rate": 16000,
     "channels": 1,
-    "silence_threshold": 0.04,
+    "input_device": "",
+    "silence_threshold": 0.01,
     "min_record_seconds": 0.5,
     "max_record_seconds": 120.0,
     "silence_duration": 3.0,
@@ -92,6 +93,7 @@ COMPUTE_TYPE = config.get("compute_type", DEFAULT_CONFIG["compute_type"])
 LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
 SAMPLE_RATE = int(config.get("sample_rate", DEFAULT_CONFIG["sample_rate"]))
 CHANNELS = int(config.get("channels", DEFAULT_CONFIG["channels"]))
+INPUT_DEVICE = str(config.get("input_device", DEFAULT_CONFIG["input_device"]))
 SILENCE_THRESHOLD = _safe_float(config.get("silence_threshold"), DEFAULT_CONFIG["silence_threshold"])
 MIN_RECORD_SECONDS = _safe_float(config.get("min_record_seconds"), DEFAULT_CONFIG["min_record_seconds"])
 MAX_RECORD_SECONDS = _safe_float(config.get("max_record_seconds"), DEFAULT_CONFIG["max_record_seconds"])
@@ -108,7 +110,7 @@ SOUND_CUSTOM_STOP = str(config.get("sound_custom_stop", DEFAULT_CONFIG["sound_cu
 SOUND_CUSTOM_SUCCESS = str(config.get("sound_custom_success", DEFAULT_CONFIG["sound_custom_success"]))
 
 def reload_runtime_config():
-    global config, LANGUAGE, SAMPLE_RATE, CHANNELS, SILENCE_THRESHOLD
+    global config, LANGUAGE, SAMPLE_RATE, CHANNELS, INPUT_DEVICE, SILENCE_THRESHOLD
     global MIN_RECORD_SECONDS, MAX_RECORD_SECONDS, SILENCE_DURATION, AUTO_STOP_ON_SILENCE, INITIAL_PROMPT
     global SOUND_ENABLED, SOUND_VOLUME, SOUND_ON_START, SOUND_ON_STOP, SOUND_ON_SUCCESS
     global SOUND_CUSTOM_START, SOUND_CUSTOM_STOP, SOUND_CUSTOM_SUCCESS
@@ -120,6 +122,7 @@ def reload_runtime_config():
                 LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
                 SAMPLE_RATE = int(config.get("sample_rate", DEFAULT_CONFIG["sample_rate"]))
                 CHANNELS = int(config.get("channels", DEFAULT_CONFIG["channels"]))
+                INPUT_DEVICE = str(config.get("input_device", DEFAULT_CONFIG["input_device"]))
                 SILENCE_THRESHOLD = _safe_float(config.get("silence_threshold"), DEFAULT_CONFIG["silence_threshold"])
                 MIN_RECORD_SECONDS = _safe_float(config.get("min_record_seconds"), DEFAULT_CONFIG["min_record_seconds"])
                 MAX_RECORD_SECONDS = _safe_float(config.get("max_record_seconds"), DEFAULT_CONFIG["max_record_seconds"])
@@ -134,7 +137,7 @@ def reload_runtime_config():
                 SOUND_CUSTOM_START = str(config.get("sound_custom_start", DEFAULT_CONFIG["sound_custom_start"]))
                 SOUND_CUSTOM_STOP = str(config.get("sound_custom_stop", DEFAULT_CONFIG["sound_custom_stop"]))
                 SOUND_CUSTOM_SUCCESS = str(config.get("sound_custom_success", DEFAULT_CONFIG["sound_custom_success"]))
-                print(f"[{time.strftime('%H:%M:%S')}] Runtime config reloaded (lang={LANGUAGE}, silence_dur={SILENCE_DURATION}s, auto_stop={AUTO_STOP_ON_SILENCE}, sound={SOUND_ENABLED})")
+                print(f"[{time.strftime('%H:%M:%S')}] Runtime config reloaded (lang={LANGUAGE}, dev={INPUT_DEVICE or 'default'}, silence_dur={SILENCE_DURATION}s, auto_stop={AUTO_STOP_ON_SILENCE}, sound={SOUND_ENABLED})")
         except Exception as e:
             print(f"Error reloading config: {e}")
 
@@ -268,11 +271,17 @@ class RecordingThread(threading.Thread):
         super().__init__()
         self.is_recording = False
         self.audio_chunks = []
-        self.device_name = "sysdefault"
-        try:
-            sd.query_devices(self.device_name, "input")
-        except Exception:
-            self.device_name = None
+        self.device = None
+        if INPUT_DEVICE and INPUT_DEVICE.strip():
+            dev_str = INPUT_DEVICE.strip()
+            try:
+                dev_idx = int(dev_str) if dev_str.isdigit() else dev_str
+                sd.query_devices(dev_idx, "input")
+                self.device = dev_idx
+                print(f"[{time.strftime('%H:%M:%S')}] Using configured input device: {self.device}")
+            except Exception as e:
+                print(f"[{time.strftime('%H:%M:%S')}] Warning: Configured input device '{INPUT_DEVICE}' not found ({e}). Using default device.")
+                self.device = None
 
     def run(self):
         self.is_recording = True
@@ -289,12 +298,12 @@ class RecordingThread(threading.Thread):
                 dtype=np.float32,
                 blocksize=int(SAMPLE_RATE * 0.1),  # 100ms blocks
                 callback=callback,
-                device=self.device_name
+                device=self.device
             ):
                 while self.is_recording:
                     time.sleep(0.05)
         except Exception as e:
-            print(f"Audio stream error: {e}")
+            print(f"[{time.strftime('%H:%M:%S')}] Audio stream error: {e}")
             
     def stop(self):
         self.is_recording = False
@@ -381,7 +390,8 @@ def stop_and_transcribe(reason="auto"):
             audio_data = np.concatenate(recorder.audio_chunks, axis=0)
         
     duration = len(audio_data) / SAMPLE_RATE if audio_data is not None else 0
-    print(f"[{time.strftime('%H:%M:%S')}] Audio recording stopped. Duration: {duration:.2f}s")
+    audio_rms = rms(audio_data) if audio_data is not None else 0.0
+    print(f"[{time.strftime('%H:%M:%S')}] Audio recording stopped. Duration: {duration:.2f}s, Level (RMS): {audio_rms:.5f}")
     
     if duration < MIN_RECORD_SECONDS or audio_data is None:
         print(f"[{time.strftime('%H:%M:%S')}] Skipping: duration ({duration:.2f}s) is shorter than minimum ({MIN_RECORD_SECONDS}s)")
@@ -398,7 +408,8 @@ def stop_and_transcribe(reason="auto"):
         
         # Trim trailing silence to prevent hallucination on tail padding
         orig_len = len(audio_float)
-        audio_float = trim_trailing_silence(audio_float, sample_rate=SAMPLE_RATE, threshold=SILENCE_THRESHOLD / 2.0, pad_seconds=0.3)
+        trim_thresh = max(0.003, SILENCE_THRESHOLD / 2.0)
+        audio_float = trim_trailing_silence(audio_float, sample_rate=SAMPLE_RATE, threshold=trim_thresh, pad_seconds=0.5)
         trimmed_len = len(audio_float)
         if orig_len > trimmed_len:
             print(f"[{time.strftime('%H:%M:%S')}] Trimmed trailing silence: {(orig_len - trimmed_len) / SAMPLE_RATE:.2f}s removed.")
@@ -417,10 +428,10 @@ def stop_and_transcribe(reason="auto"):
             compression_ratio_threshold=2.2,    # Filters out runaway repetitive segments
             vad_filter=True,
             vad_parameters=dict(
-                threshold=0.5,
-                min_speech_duration_ms=250,
+                threshold=0.35,                 # Relaxed threshold to avoid cutting off quiet voices
+                min_speech_duration_ms=200,
                 min_silence_duration_ms=400,
-                speech_pad_ms=200
+                speech_pad_ms=250
             ),
             initial_prompt=INITIAL_PROMPT if INITIAL_PROMPT else None
         )
