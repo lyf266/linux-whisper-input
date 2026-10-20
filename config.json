@@ -13,7 +13,7 @@
   "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
   "proxy": "",
   "sound_enabled": true,
-  "sound_volume": 0.5,
+  "sound_volume": 0.15,
   "sound_on_start": true,
   "sound_on_stop": true,
   "sound_on_success": true,

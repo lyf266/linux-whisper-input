@@ -22,7 +22,7 @@ DEFAULT_CONFIG = {
     "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
     "proxy": "",
     "sound_enabled": True,
-    "sound_volume": 0.5,
+    "sound_volume": 0.15,
     "sound_on_start": True,
     "sound_on_stop": True,
     "sound_on_success": True,
@@ -165,7 +165,7 @@ def generate_tone(
     freqs: list[float] | tuple[float, ...],
     durations: list[float] | tuple[float, ...],
     sample_rate: int = 44100,
-    volume: float = 0.5,
+    volume: float = 0.15,
 ) -> np.ndarray:
     chunks = []
     for freq, dur in zip(freqs, durations):
@@ -173,10 +173,15 @@ def generate_tone(
         if n_samples <= 0:
             continue
         t = np.linspace(0, dur, n_samples, endpoint=False)
-        # Hann window envelope to prevent clicks: sin^2(pi * t)
-        env = np.sin(np.pi * np.linspace(0, 1, n_samples)) ** 2
-        tone = np.sin(2 * np.pi * freq * t) * env
-        chunks.append(tone)
+        attack_len = min(int(sample_rate * 0.010), n_samples // 4)
+        decay_len = n_samples - attack_len
+        # Smooth attack ramp and natural acoustic decay
+        attack = np.sin(np.pi * 0.5 * np.linspace(0, 1, attack_len)) ** 2
+        decay = np.exp(-4.5 * np.linspace(0, 1, decay_len))
+        env = np.concatenate([attack, decay])
+        # 85% fundamental + 15% warm overtone for marimba/bell texture
+        tone = 0.85 * np.sin(2 * np.pi * freq * t) + 0.15 * np.sin(2 * np.pi * (freq * 2) * t)
+        chunks.append(tone * env)
     if not chunks:
         return np.zeros(0, dtype=np.float32)
     signal = np.concatenate(chunks) * float(np.clip(volume, 0.0, 1.0))
@@ -206,9 +211,9 @@ def play_synthetic_sound(event_type: str, block: bool = True):
         return
 
     tones = {
-        "start": ([520.0, 780.0], [0.05, 0.06]),
-        "stop": ([650.0, 440.0], [0.05, 0.06]),
-        "success": ([880.0], [0.08]),
+        "start": ([440.0, 587.0], [0.055, 0.065]),
+        "stop": ([587.0, 440.0], [0.055, 0.065]),
+        "success": ([659.0], [0.085]),
     }
     tone_cfg = tones.get(event_type)
     if not tone_cfg:
