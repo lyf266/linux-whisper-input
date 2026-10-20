@@ -153,7 +153,15 @@ Configure your recording thresholds and hardware settings in `config.json`:
   "silence_duration": 3.0,
   "auto_stop_on_silence": true,
   "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
-  "proxy": ""
+  "proxy": "",
+  "sound_enabled": true,
+  "sound_volume": 0.5,
+  "sound_on_start": true,
+  "sound_on_stop": true,
+  "sound_on_success": true,
+  "sound_custom_start": "",
+  "sound_custom_stop": "",
+  "sound_custom_success": ""
 }
 ```
 
@@ -163,6 +171,12 @@ Configure your recording thresholds and hardware settings in `config.json`:
 *   `language`: Set to `"auto"` for automatic multilingual detection (seamless English & Chinese switching), or specify `"zh"`, `"en"`.
 *   `silence_duration`: Silence duration in seconds before recording auto-stops (default is now `3.0` seconds for comfortable pauses).
 *   `auto_stop_on_silence`: If `true`, stops automatically after silence. If `false`, recording only stops when pressing the shortcut again.
+*   `sound_enabled`: Master switch for audio prompt sound effects (`true`/`false`).
+*   `sound_volume`: Volume scale (`0.0` - `1.0`, default `0.5`).
+*   `sound_on_start`: Enable sound on recording start (`true`/`false`). Plays a rising chime before mic opens to prevent bleed.
+*   `sound_on_stop`: Enable sound on recording stop (`true`/`false`). Plays a soft falling chime.
+*   `sound_on_success`: Enable sound when text transcription finishes and pastes (`true`/`false`).
+*   `sound_custom_start` / `stop` / `success`: Optional custom sound file paths (`.wav`, `.ogg`, `.oga`). If empty or file not found, defaults to built-in Hann-windowed synthetic tones.
 *   **Runtime Reload**: Modifying `config.json` takes effect on the next recording trigger without restarting the systemd service!
 
 ---

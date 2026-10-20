@@ -20,7 +20,15 @@ DEFAULT_CONFIG = {
     "silence_duration": 3.0,
     "auto_stop_on_silence": True,
     "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
-    "proxy": ""
+    "proxy": "",
+    "sound_enabled": True,
+    "sound_volume": 0.5,
+    "sound_on_start": True,
+    "sound_on_stop": True,
+    "sound_on_success": True,
+    "sound_custom_start": "",
+    "sound_custom_stop": "",
+    "sound_custom_success": ""
 }
 
 config = DEFAULT_CONFIG.copy()
@@ -49,41 +57,84 @@ import socket
 import threading
 import time
 import subprocess
+import shutil
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
+
+def _safe_float(val, default: float) -> float:
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
+
+def _safe_bool(val, default: bool) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    if isinstance(val, str):
+        return val.lower() in ("true", "1", "yes", "on")
+    return default
+
+def _find_audio_player() -> str | None:
+    for p in ("pw-play", "paplay", "aplay"):
+        path = shutil.which(p)
+        if path:
+            return path
+    return None
+
+AUDIO_PLAYER_BIN = _find_audio_player()
 
 MODEL_SIZE = config.get("model_size", DEFAULT_CONFIG["model_size"])
 DEVICE = config.get("device", DEFAULT_CONFIG["device"])
 COMPUTE_TYPE = config.get("compute_type", DEFAULT_CONFIG["compute_type"])
 LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
-SAMPLE_RATE = config.get("sample_rate", DEFAULT_CONFIG["sample_rate"])
-CHANNELS = config.get("channels", DEFAULT_CONFIG["channels"])
-SILENCE_THRESHOLD = config.get("silence_threshold", DEFAULT_CONFIG["silence_threshold"])
-MIN_RECORD_SECONDS = config.get("min_record_seconds", DEFAULT_CONFIG["min_record_seconds"])
-MAX_RECORD_SECONDS = config.get("max_record_seconds", DEFAULT_CONFIG["max_record_seconds"])
-SILENCE_DURATION = config.get("silence_duration", DEFAULT_CONFIG["silence_duration"])
-AUTO_STOP_ON_SILENCE = config.get("auto_stop_on_silence", DEFAULT_CONFIG["auto_stop_on_silence"])
+SAMPLE_RATE = int(config.get("sample_rate", DEFAULT_CONFIG["sample_rate"]))
+CHANNELS = int(config.get("channels", DEFAULT_CONFIG["channels"]))
+SILENCE_THRESHOLD = _safe_float(config.get("silence_threshold"), DEFAULT_CONFIG["silence_threshold"])
+MIN_RECORD_SECONDS = _safe_float(config.get("min_record_seconds"), DEFAULT_CONFIG["min_record_seconds"])
+MAX_RECORD_SECONDS = _safe_float(config.get("max_record_seconds"), DEFAULT_CONFIG["max_record_seconds"])
+SILENCE_DURATION = _safe_float(config.get("silence_duration"), DEFAULT_CONFIG["silence_duration"])
+AUTO_STOP_ON_SILENCE = _safe_bool(config.get("auto_stop_on_silence"), DEFAULT_CONFIG["auto_stop_on_silence"])
 INITIAL_PROMPT = config.get("initial_prompt", DEFAULT_CONFIG["initial_prompt"])
+SOUND_ENABLED = _safe_bool(config.get("sound_enabled"), DEFAULT_CONFIG["sound_enabled"])
+SOUND_VOLUME = _safe_float(config.get("sound_volume"), DEFAULT_CONFIG["sound_volume"])
+SOUND_ON_START = _safe_bool(config.get("sound_on_start"), DEFAULT_CONFIG["sound_on_start"])
+SOUND_ON_STOP = _safe_bool(config.get("sound_on_stop"), DEFAULT_CONFIG["sound_on_stop"])
+SOUND_ON_SUCCESS = _safe_bool(config.get("sound_on_success"), DEFAULT_CONFIG["sound_on_success"])
+SOUND_CUSTOM_START = str(config.get("sound_custom_start", DEFAULT_CONFIG["sound_custom_start"]))
+SOUND_CUSTOM_STOP = str(config.get("sound_custom_stop", DEFAULT_CONFIG["sound_custom_stop"]))
+SOUND_CUSTOM_SUCCESS = str(config.get("sound_custom_success", DEFAULT_CONFIG["sound_custom_success"]))
 
 def reload_runtime_config():
     global config, LANGUAGE, SAMPLE_RATE, CHANNELS, SILENCE_THRESHOLD
     global MIN_RECORD_SECONDS, MAX_RECORD_SECONDS, SILENCE_DURATION, AUTO_STOP_ON_SILENCE, INITIAL_PROMPT
+    global SOUND_ENABLED, SOUND_VOLUME, SOUND_ON_START, SOUND_ON_STOP, SOUND_ON_SUCCESS
+    global SOUND_CUSTOM_START, SOUND_CUSTOM_STOP, SOUND_CUSTOM_SUCCESS
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 new_cfg = json.load(f)
                 config.update(new_cfg)
                 LANGUAGE = config.get("language", DEFAULT_CONFIG["language"])
-                SAMPLE_RATE = config.get("sample_rate", DEFAULT_CONFIG["sample_rate"])
-                CHANNELS = config.get("channels", DEFAULT_CONFIG["channels"])
-                SILENCE_THRESHOLD = float(config.get("silence_threshold", DEFAULT_CONFIG["silence_threshold"]))
-                MIN_RECORD_SECONDS = float(config.get("min_record_seconds", DEFAULT_CONFIG["min_record_seconds"]))
-                MAX_RECORD_SECONDS = float(config.get("max_record_seconds", DEFAULT_CONFIG["max_record_seconds"]))
-                SILENCE_DURATION = float(config.get("silence_duration", DEFAULT_CONFIG["silence_duration"]))
-                AUTO_STOP_ON_SILENCE = bool(config.get("auto_stop_on_silence", DEFAULT_CONFIG["auto_stop_on_silence"]))
+                SAMPLE_RATE = int(config.get("sample_rate", DEFAULT_CONFIG["sample_rate"]))
+                CHANNELS = int(config.get("channels", DEFAULT_CONFIG["channels"]))
+                SILENCE_THRESHOLD = _safe_float(config.get("silence_threshold"), DEFAULT_CONFIG["silence_threshold"])
+                MIN_RECORD_SECONDS = _safe_float(config.get("min_record_seconds"), DEFAULT_CONFIG["min_record_seconds"])
+                MAX_RECORD_SECONDS = _safe_float(config.get("max_record_seconds"), DEFAULT_CONFIG["max_record_seconds"])
+                SILENCE_DURATION = _safe_float(config.get("silence_duration"), DEFAULT_CONFIG["silence_duration"])
+                AUTO_STOP_ON_SILENCE = _safe_bool(config.get("auto_stop_on_silence"), DEFAULT_CONFIG["auto_stop_on_silence"])
                 INITIAL_PROMPT = config.get("initial_prompt", DEFAULT_CONFIG["initial_prompt"])
-                print(f"[{time.strftime('%H:%M:%S')}] Runtime config reloaded (lang={LANGUAGE}, silence_dur={SILENCE_DURATION}s, auto_stop={AUTO_STOP_ON_SILENCE})")
+                SOUND_ENABLED = _safe_bool(config.get("sound_enabled"), DEFAULT_CONFIG["sound_enabled"])
+                SOUND_VOLUME = _safe_float(config.get("sound_volume"), DEFAULT_CONFIG["sound_volume"])
+                SOUND_ON_START = _safe_bool(config.get("sound_on_start"), DEFAULT_CONFIG["sound_on_start"])
+                SOUND_ON_STOP = _safe_bool(config.get("sound_on_stop"), DEFAULT_CONFIG["sound_on_stop"])
+                SOUND_ON_SUCCESS = _safe_bool(config.get("sound_on_success"), DEFAULT_CONFIG["sound_on_success"])
+                SOUND_CUSTOM_START = str(config.get("sound_custom_start", DEFAULT_CONFIG["sound_custom_start"]))
+                SOUND_CUSTOM_STOP = str(config.get("sound_custom_stop", DEFAULT_CONFIG["sound_custom_stop"]))
+                SOUND_CUSTOM_SUCCESS = str(config.get("sound_custom_success", DEFAULT_CONFIG["sound_custom_success"]))
+                print(f"[{time.strftime('%H:%M:%S')}] Runtime config reloaded (lang={LANGUAGE}, silence_dur={SILENCE_DURATION}s, auto_stop={AUTO_STOP_ON_SILENCE}, sound={SOUND_ENABLED})")
         except Exception as e:
             print(f"Error reloading config: {e}")
 
@@ -108,6 +159,99 @@ def send_notification(title, message="", timeout_ms=1000):
         ], check=False)
     except Exception as e:
         print(f"Notification error: {e}")
+
+# Audio prompt sound generator and playback
+def generate_tone(
+    freqs: list[float] | tuple[float, ...],
+    durations: list[float] | tuple[float, ...],
+    sample_rate: int = 44100,
+    volume: float = 0.5,
+) -> np.ndarray:
+    chunks = []
+    for freq, dur in zip(freqs, durations):
+        n_samples = int(sample_rate * dur)
+        if n_samples <= 0:
+            continue
+        t = np.linspace(0, dur, n_samples, endpoint=False)
+        # Hann window envelope to prevent clicks: sin^2(pi * t)
+        env = np.sin(np.pi * np.linspace(0, 1, n_samples)) ** 2
+        tone = np.sin(2 * np.pi * freq * t) * env
+        chunks.append(tone)
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    signal = np.concatenate(chunks) * float(np.clip(volume, 0.0, 1.0))
+    return signal.astype(np.float32)
+
+def play_custom_file(file_path: str, timeout_sec: float = 3.0) -> bool:
+    if not file_path or not os.path.isfile(file_path):
+        return False
+    if not AUDIO_PLAYER_BIN:
+        print(f"Warning: No audio player found to play {file_path}")
+        return False
+    try:
+        # Run synchronously with timeout; reap PID immediately to prevent zombie processes
+        subprocess.run([AUDIO_PLAYER_BIN, file_path], check=False, timeout=timeout_sec)
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"Warning: Audio player timed out playing {file_path}")
+        return False
+    except Exception as e:
+        print(f"Error playing sound file {file_path}: {e}")
+        return False
+
+def play_synthetic_sound(event_type: str, block: bool = True):
+    sr = 44100
+    vol = max(0.0, min(1.0, SOUND_VOLUME))
+    if vol <= 0.0:
+        return
+
+    tones = {
+        "start": ([520.0, 780.0], [0.05, 0.06]),
+        "stop": ([650.0, 440.0], [0.05, 0.06]),
+        "success": ([880.0], [0.08]),
+    }
+    tone_cfg = tones.get(event_type)
+    if not tone_cfg:
+        return
+
+    data = generate_tone(tone_cfg[0], tone_cfg[1], sample_rate=sr, volume=vol)
+    try:
+        sd.play(data, samplerate=sr)
+        if block:
+            sd.wait()
+    except Exception as e:
+        print(f"Error playing synthetic sound ({event_type}): {e}")
+
+def play_sound(event_type: str, block: bool = False):
+    if not SOUND_ENABLED:
+        return
+
+    enabled_map = {
+        "start": SOUND_ON_START,
+        "stop": SOUND_ON_STOP,
+        "success": SOUND_ON_SUCCESS,
+    }
+    if not enabled_map.get(event_type, False):
+        return
+
+    custom_map = {
+        "start": SOUND_CUSTOM_START,
+        "stop": SOUND_CUSTOM_STOP,
+        "success": SOUND_CUSTOM_SUCCESS,
+    }
+    custom_path = custom_map.get(event_type, "")
+
+    def _execute():
+        played = False
+        if custom_path and os.path.isfile(custom_path):
+            played = play_custom_file(custom_path, timeout_sec=3.0)
+        if not played:
+            play_synthetic_sound(event_type, block=True)
+
+    if block:
+        _execute()
+    else:
+        threading.Thread(target=_execute, daemon=True).start()
 
 def rms(data: np.ndarray) -> float:
     if len(data) == 0:
@@ -285,6 +429,7 @@ def stop_and_transcribe(reason="auto"):
         if result_text:
             print(f"[{time.strftime('%H:%M:%S')}] Transcription finished successfully. Result: {result_text}")
             send_notification("✓ 识别完成", result_text, timeout_ms=2000)
+            play_sound("success", block=False)
             type_text(result_text)
         else:
             print(f"[{time.strftime('%H:%M:%S')}] Transcription finished. No speech/text detected.")
@@ -342,6 +487,9 @@ def trigger_stop(reason="auto"):
     with state_lock:
         if state == "RECORDING":
             state = "TRANSCRIBING"
+            if recorder:
+                recorder.stop()
+            play_sound("stop", block=False)
             threading.Thread(target=stop_and_transcribe, kwargs={"reason": reason}, daemon=True).start()
 
 def handle_toggle():
@@ -356,6 +504,8 @@ def handle_toggle():
             hint = "再次按快捷键手动发送" + (f"，或停顿{SILENCE_DURATION:g}秒自动发送" if AUTO_STOP_ON_SILENCE else "")
             send_notification("🎤 正在录音...", hint, timeout_ms=3000)
             
+            play_sound("start", block=True)
+            
             recorder = RecordingThread()
             recorder.start()
             
@@ -365,6 +515,9 @@ def handle_toggle():
         elif state == "RECORDING":
             state = "TRANSCRIBING"
             print("Transitioning to TRANSCRIBING state (Manual Stop). Stopping audio stream...")
+            if recorder:
+                recorder.stop()
+            play_sound("stop", block=False)
             send_notification("⏹️ 结束录音", "正在识别，请稍候...", timeout_ms=1500)
             threading.Thread(target=stop_and_transcribe, kwargs={"reason": "manual"}, daemon=True).start()
             
