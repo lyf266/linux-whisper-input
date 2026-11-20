@@ -21,5 +21,5 @@ if [ -n "$NVIDIA_DIRS" ]; then
     export LD_LIBRARY_PATH="$NVIDIA_DIRS:${LD_LIBRARY_PATH:-}"
 fi
 
-# Execute daemon (using exec to let systemd manage the python process directly)
-exec python -u "$DIR/daemon.py"
+# Execute daemon or UI (using exec to let caller manage the process directly)
+exec python -u "$DIR/daemon.py" "$@"

@@ -23,7 +23,7 @@ DEFAULT_CONFIG = {
     "initial_prompt": "Hello, this is a sentence in English or Chinese. 你好，这是一个中英文混合的句子，包含正确的标点符号。",
     "proxy": "",
     "sound_enabled": True,
-    "sound_volume": 0.15,
+    "sound_volume": 0.35,
     "sound_on_start": True,
     "sound_on_stop": True,
     "sound_on_success": True,
@@ -167,26 +167,43 @@ def send_notification(title, message="", timeout_ms=1000):
         print(f"Notification error: {e}")
 
 # Audio prompt sound assets and playback
-def _generate_wav_file(path: str, freqs: list[float] | tuple[float, ...], durations: list[float] | tuple[float, ...], sample_rate: int = 48000):
+# Sound assets schema version to trigger automatic upgrade when sound parameters improve
+SOUND_ASSETS_VERSION = "2.0"
+VERSION_FILE = os.path.join(SOUNDS_DIR, ".version")
+
+def _generate_wav_file(
+    path: str,
+    freqs: list[float] | tuple[float, ...],
+    durations: list[float] | tuple[float, ...],
+    warmup_ms: int = 80,
+    sample_rate: int = 48000
+):
     chunks = []
-    # 15ms lead-in silence to allow the audio server & DAC to uncork smoothly without popping
-    chunks.append(np.zeros(int(sample_rate * 0.015), dtype=np.float32))
+    # 1. Warmup preamble: gentle sub-audible ramp to wake DAC from suspend state without pop
+    if warmup_ms > 0:
+        n_warmup = int(sample_rate * (warmup_ms / 1000.0))
+        t_w = np.linspace(0, warmup_ms / 1000.0, n_warmup, endpoint=False)
+        # 30Hz very soft ramp up to wake hardware without audible pop
+        warmup_signal = 0.005 * np.sin(2 * np.pi * 30.0 * t_w) * np.linspace(0, 1.0, n_warmup)
+        chunks.append(warmup_signal.astype(np.float32))
     
+    # 2. Main melodic tones
     for freq, dur in zip(freqs, durations):
         n_samples = int(sample_rate * dur)
         if n_samples <= 0:
             continue
         t = np.linspace(0, dur, n_samples, endpoint=False)
-        attack_len = min(int(sample_rate * 0.012), n_samples // 4)
+        attack_len = min(int(sample_rate * 0.015), n_samples // 4)
         decay_len = n_samples - attack_len
         attack = np.sin(np.pi * 0.5 * np.linspace(0, 1, attack_len)) ** 2
-        decay = np.exp(-4.5 * np.linspace(0, 1, decay_len))
+        decay = np.exp(-4.0 * np.linspace(0, 1, decay_len))
         env = np.concatenate([attack, decay])
+        # Fundamental + gentle warm octave
         tone = 0.85 * np.sin(2 * np.pi * freq * t) + 0.15 * np.sin(2 * np.pi * (freq * 2) * t)
         chunks.append(tone * env)
         
-    # 60ms trailing silence to guarantee complete audio server buffer drain
-    chunks.append(np.zeros(int(sample_rate * 0.060), dtype=np.float32))
+    # 3. 80ms trailing silence to guarantee complete audio server buffer drain
+    chunks.append(np.zeros(int(sample_rate * 0.080), dtype=np.float32))
     signal = np.concatenate(chunks)
     pcm16 = (signal * 32767).astype(np.int16)
     
@@ -197,25 +214,45 @@ def _generate_wav_file(path: str, freqs: list[float] | tuple[float, ...], durati
         wf.setframerate(sample_rate)
         wf.writeframes(pcm16.tobytes())
 
-def ensure_sound_assets():
+def ensure_sound_assets(force_regenerate: bool = False):
     os.makedirs(SOUNDS_DIR, exist_ok=True)
-    specs = {
-        "start.wav": ([440.0, 587.0], [0.065, 0.075]),
-        "stop.wav": ([587.0, 440.0], [0.065, 0.075]),
-        "success.wav": ([659.0], [0.095]),
-    }
-    for filename, (freqs, durs) in specs.items():
-        path = os.path.join(SOUNDS_DIR, filename)
-        if not os.path.exists(path):
+    
+    # Check if existing assets need upgrade
+    should_upgrade = force_regenerate
+    if not should_upgrade:
+        if not os.path.exists(VERSION_FILE):
+            should_upgrade = True
+        else:
             try:
-                _generate_wav_file(path, freqs, durs)
+                with open(VERSION_FILE, "r", encoding="utf-8") as vf:
+                    if vf.read().strip() != SOUND_ASSETS_VERSION:
+                        should_upgrade = True
+            except Exception:
+                should_upgrade = True
+
+    specs = {
+        "start.wav": ([440.0, 587.33], [0.085, 0.095], 80),
+        "stop.wav": ([587.33, 440.0], [0.080, 0.090], 30),
+        "success.wav": ([523.25, 659.25], [0.075, 0.095], 30),
+    }
+    for filename, (freqs, durs, warmup) in specs.items():
+        path = os.path.join(SOUNDS_DIR, filename)
+        if should_upgrade or not os.path.exists(path):
+            try:
+                _generate_wav_file(path, freqs, durs, warmup_ms=warmup)
             except Exception as e:
                 print(f"Error generating {filename}: {e}")
+                
+    try:
+        with open(VERSION_FILE, "w", encoding="utf-8") as vf:
+            vf.write(SOUND_ASSETS_VERSION)
+    except Exception:
+        pass
 
 # Pre-generate standard sound assets on load
 ensure_sound_assets()
 
-def play_audio_file(file_path: str, volume: float = 0.15, timeout_sec: float = 3.0) -> bool:
+def play_audio_file(file_path: str, volume: float = 0.35, timeout_sec: float = 3.0) -> bool:
     if not file_path or not os.path.isfile(file_path):
         return False
         
@@ -313,14 +350,21 @@ class RecordingThread(threading.Thread):
         self.device = None
         if INPUT_DEVICE and INPUT_DEVICE.strip():
             dev_str = INPUT_DEVICE.strip()
-            try:
-                dev_idx = int(dev_str) if dev_str.isdigit() else dev_str
-                sd.query_devices(dev_idx, "input")
-                self.device = dev_idx
-                print(f"[{time.strftime('%H:%M:%S')}] Using configured input device: {self.device}")
-            except Exception as e:
-                print(f"[{time.strftime('%H:%M:%S')}] Warning: Configured input device '{INPUT_DEVICE}' not found ({e}). Using default device.")
-                self.device = None
+            if dev_str.isdigit():
+                try:
+                    self.device = int(dev_str)
+                    print(f"[{time.strftime('%H:%M:%S')}] Using configured device index: {self.device}")
+                except Exception:
+                    self.device = None
+            else:
+                # Set PULSE_SOURCE for PipeWire/PulseAudio native resampled routing
+                os.environ["PULSE_SOURCE"] = dev_str
+                self.device = "pulse"
+                print(f"[{time.strftime('%H:%M:%S')}] Using configured PipeWire source: {dev_str}")
+        else:
+            if "PULSE_SOURCE" in os.environ:
+                del os.environ["PULSE_SOURCE"]
+            self.device = None
 
     def run(self):
         self.is_recording = True
@@ -648,6 +692,12 @@ def main():
                 print(f"[{time.strftime('%H:%M:%S')}] Socket received: {command}")
                 if command == "toggle":
                     handle_toggle()
+                elif command == "reload":
+                    reload_runtime_config()
+                    try:
+                        conn.sendall(b"OK: reloaded\n")
+                    except OSError:
+                        pass
             except Exception as e:
                 print(f"Error handling socket client: {e}")
             finally:
@@ -659,4 +709,8 @@ def main():
             os.unlink(socket_path)
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] in ("--ui", "--gui", "gui", "ui"):
+        import settings_gui
+        settings_gui.main()
+    else:
+        main()

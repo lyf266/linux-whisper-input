@@ -204,6 +204,34 @@ ln -sf /home/f1are/voice-input-service/voice-input.service ~/.config/systemd/use
 
 ---
 
+## 🎛️ Graphical Settings Console (GUI 控制台)
+
+A modern, standalone PyQt6 configuration dashboard is included to easily manage audio devices, sound prompts, and VAD parameters without editing JSON files by hand.
+
+### Launching the GUI
+
+*   **From Application Menu**: Open your KDE Plasma Kickoff / Application Launcher and search for **语音输入控制台** (or **Voice Input Settings**).
+*   **From Terminal**:
+    ```bash
+    /home/f1are/voice-input-service/start.sh --ui
+    # or
+    python /home/f1are/voice-input-service/settings_gui.py
+    ```
+
+### GUI Features
+
+1.  **Service Monitoring & Controls**: Displays live status of `voice-input.service` (`Active` / `Inactive`) with one-click **重启服务** (Restart Service) and **热重载配置** (Hot Reload).
+2.  **Microphone Input Selector**: Automatically enumerates all available PipeWire/ALSA input hardware (Built-in, USB microphones, Bluetooth headsets) and allows binding a specific device or following the PipeWire default, with an option to synchronize with the system-wide default source (`pactl set-default-source`).
+3.  **Live VU-Meter**: Real-time microphone audio level meter with gradient bar (Green / Orange / Red) to test speech input and sound levels immediately.
+4.  **Prompt Sound Effects**:
+    *   Toggle sound effects on/off globally.
+    *   Independent toggles for **Record Start** (`start.wav`), **Record Stop** (`stop.wav`), and **Transcribe Success** (`success.wav`).
+    *   Smooth volume slider (0%~100%) with instant **试听** (Preview Test) buttons.
+    *   Browse custom `.wav`/`.mp3` audio files.
+5.  **Whisper & VAD Configuration**: Language selection (`auto`, `zh`, `en`, `yue`, `ja`, etc.), silence auto-stop toggle, and silence duration timeout slider.
+
+---
+
 ## ⌨️ Bind Shortcut (`Meta+H` / custom)
 
 To register a hotkey in KDE Plasma 6:
