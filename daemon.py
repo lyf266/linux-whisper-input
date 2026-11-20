@@ -59,9 +59,12 @@ import threading
 import time
 import subprocess
 import shutil
+import wave
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
+
+SOUNDS_DIR = os.path.join(DIR, "sounds")
 
 def _safe_float(val, default: float) -> float:
     try:
@@ -79,7 +82,7 @@ def _safe_bool(val, default: bool) -> bool:
     return default
 
 def _find_audio_player() -> str | None:
-    for p in ("pw-play", "paplay", "aplay"):
+    for p in ("paplay", "pw-play", "aplay"):
         path = shutil.which(p)
         if path:
             return path
@@ -163,72 +166,101 @@ def send_notification(title, message="", timeout_ms=1000):
     except Exception as e:
         print(f"Notification error: {e}")
 
-# Audio prompt sound generator and playback
-def generate_tone(
-    freqs: list[float] | tuple[float, ...],
-    durations: list[float] | tuple[float, ...],
-    sample_rate: int = 44100,
-    volume: float = 0.15,
-) -> np.ndarray:
+# Audio prompt sound assets and playback
+def _generate_wav_file(path: str, freqs: list[float] | tuple[float, ...], durations: list[float] | tuple[float, ...], sample_rate: int = 48000):
     chunks = []
+    # 15ms lead-in silence to allow the audio server & DAC to uncork smoothly without popping
+    chunks.append(np.zeros(int(sample_rate * 0.015), dtype=np.float32))
+    
     for freq, dur in zip(freqs, durations):
         n_samples = int(sample_rate * dur)
         if n_samples <= 0:
             continue
         t = np.linspace(0, dur, n_samples, endpoint=False)
-        attack_len = min(int(sample_rate * 0.010), n_samples // 4)
+        attack_len = min(int(sample_rate * 0.012), n_samples // 4)
         decay_len = n_samples - attack_len
-        # Smooth attack ramp and natural acoustic decay
         attack = np.sin(np.pi * 0.5 * np.linspace(0, 1, attack_len)) ** 2
         decay = np.exp(-4.5 * np.linspace(0, 1, decay_len))
         env = np.concatenate([attack, decay])
-        # 85% fundamental + 15% warm overtone for marimba/bell texture
         tone = 0.85 * np.sin(2 * np.pi * freq * t) + 0.15 * np.sin(2 * np.pi * (freq * 2) * t)
         chunks.append(tone * env)
-    if not chunks:
-        return np.zeros(0, dtype=np.float32)
-    signal = np.concatenate(chunks) * float(np.clip(volume, 0.0, 1.0))
-    return signal.astype(np.float32)
+        
+    # 60ms trailing silence to guarantee complete audio server buffer drain
+    chunks.append(np.zeros(int(sample_rate * 0.060), dtype=np.float32))
+    signal = np.concatenate(chunks)
+    pcm16 = (signal * 32767).astype(np.int16)
+    
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm16.tobytes())
 
-def play_custom_file(file_path: str, timeout_sec: float = 3.0) -> bool:
+def ensure_sound_assets():
+    os.makedirs(SOUNDS_DIR, exist_ok=True)
+    specs = {
+        "start.wav": ([440.0, 587.0], [0.065, 0.075]),
+        "stop.wav": ([587.0, 440.0], [0.065, 0.075]),
+        "success.wav": ([659.0], [0.095]),
+    }
+    for filename, (freqs, durs) in specs.items():
+        path = os.path.join(SOUNDS_DIR, filename)
+        if not os.path.exists(path):
+            try:
+                _generate_wav_file(path, freqs, durs)
+            except Exception as e:
+                print(f"Error generating {filename}: {e}")
+
+# Pre-generate standard sound assets on load
+ensure_sound_assets()
+
+def play_audio_file(file_path: str, volume: float = 0.15, timeout_sec: float = 3.0) -> bool:
     if not file_path or not os.path.isfile(file_path):
         return False
-    if not AUDIO_PLAYER_BIN:
-        print(f"Warning: No audio player found to play {file_path}")
-        return False
-    try:
-        # Run synchronously with timeout; reap PID immediately to prevent zombie processes
-        subprocess.run([AUDIO_PLAYER_BIN, file_path], check=False, timeout=timeout_sec)
-        return True
-    except subprocess.TimeoutExpired:
-        print(f"Warning: Audio player timed out playing {file_path}")
-        return False
-    except Exception as e:
-        print(f"Error playing sound file {file_path}: {e}")
-        return False
-
-def play_synthetic_sound(event_type: str, block: bool = True):
-    sr = 44100
-    vol = max(0.0, min(1.0, SOUND_VOLUME))
+        
+    vol = max(0.0, min(1.0, volume))
     if vol <= 0.0:
-        return
+        return True
 
-    tones = {
-        "start": ([440.0, 587.0], [0.055, 0.065]),
-        "stop": ([587.0, 440.0], [0.055, 0.065]),
-        "success": ([659.0], [0.085]),
-    }
-    tone_cfg = tones.get(event_type)
-    if not tone_cfg:
-        return
+    # 1. Primary: Use system audio player (paplay / pw-play)
+    if AUDIO_PLAYER_BIN:
+        cmd = [AUDIO_PLAYER_BIN]
+        basename = os.path.basename(AUDIO_PLAYER_BIN)
+        if "paplay" in basename:
+            cmd.extend([f"--volume={int(vol * 65536)}", file_path])
+        elif "pw-play" in basename:
+            cmd.extend([f"--volume={vol:.3f}", file_path])
+        else:
+            cmd.append(file_path)
+            
+        try:
+            subprocess.run(
+                cmd,
+                check=False,
+                timeout=timeout_sec,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return True
+        except subprocess.TimeoutExpired:
+            print(f"Warning: Audio player timed out playing {file_path}")
+            return False
+        except Exception as e:
+            print(f"Error playing sound file with {AUDIO_PLAYER_BIN}: {e}")
 
-    data = generate_tone(tone_cfg[0], tone_cfg[1], sample_rate=sr, volume=vol)
+    # 2. Fallback: sounddevice playback if no system player available
     try:
-        sd.play(data, samplerate=sr)
-        if block:
+        with wave.open(file_path, "rb") as wf:
+            frames = wf.readframes(wf.getnframes())
+            sr = wf.getframerate()
+            data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32767.0
+            sd.play(data * vol, samplerate=sr)
             sd.wait()
+            return True
     except Exception as e:
-        print(f"Error playing synthetic sound ({event_type}): {e}")
+        print(f"Sounddevice fallback playback error: {e}")
+        return False
 
 def play_sound(event_type: str, block: bool = False):
     if not SOUND_ENABLED:
@@ -248,13 +280,20 @@ def play_sound(event_type: str, block: bool = False):
         "success": SOUND_CUSTOM_SUCCESS,
     }
     custom_path = custom_map.get(event_type, "")
+    
+    target_path = None
+    if custom_path and os.path.isfile(custom_path):
+        target_path = custom_path
+    else:
+        std_wav = os.path.join(SOUNDS_DIR, f"{event_type}.wav")
+        if os.path.isfile(std_wav):
+            target_path = std_wav
+
+    if not target_path:
+        return
 
     def _execute():
-        played = False
-        if custom_path and os.path.isfile(custom_path):
-            played = play_custom_file(custom_path, timeout_sec=3.0)
-        if not played:
-            play_synthetic_sound(event_type, block=True)
+        play_audio_file(target_path, volume=SOUND_VOLUME, timeout_sec=3.0)
 
     if block:
         _execute()
